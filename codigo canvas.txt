@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FoodCost Pro - AI & Auto-Pricing Edition</title>
+    
+    <!-- Llibreries externes via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;800;900&display=swap');
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #f8fafc;
+        }
+        /* Estilització dels inputs lliscants (rang) */
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px; width: 16px; border-radius: 50%;
+            background: #10b981; cursor: pointer;
+        }
+        /* Amagar fletxes dels inputs numèrics */
+        input[type="number"]::-webkit-inner-spin-button, 
+        input[type="number"]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; margin: 0; 
+        }
+        /* Barra de desplaçament personalitzada */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .animate-fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        /* Ajustos per a impressió/PDF */
+        @media print {
+            .print\:hidden { display: none !important; }
+            .print\:block { display: block !important; }
+            .print\:flex { display: flex !important; }
+            .print\:bg-transparent { background-color: transparent !important; }
+            .print\:border-none { border: none !important; }
+            .print\:p-0 { padding: 0 !important; }
+            body { background-color: white; }
+            #document-escandall { gap: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const apiKey = ""; // API Key de Gemini/Imagen proveïda per l'entorn
+
+        // Component per renderitzar icones Lucide de forma segura
+        const Icon = ({ name, size = 16, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            });
+            return <i data-lucide={name} className={className} style={{ width: size, height: size, display: 'inline-block' }}></i>;
+        };
+
+        // Base de dades inicial de l'inventari
+        const defaultCatalog = [
+            { id: 'm_1', nom: 'Tomàquet Pera', quantitatFormat: 5, unitatFormat: 'kg', preuFormat: 8.50, categoria: 'Verdura' },
+            { id: 'm_2', nom: 'Ceba de Figueres', quantitatFormat: 10, unitatFormat: 'kg', preuFormat: 12.00, categoria: 'Verdura' },
+            { id: 'm_3', nom: 'Patata Monalisa', quantitatFormat: 25, unitatFormat: 'kg', preuFormat: 22.50, categoria: 'Verdura' },
+            { id: 'm_4', nom: 'All', quantitatFormat: 1, unitatFormat: 'kg', preuFormat: 5.50, categoria: 'Verdura' },
+            { id: 'm_16', nom: 'Pit de Pollastre', quantitatFormat: 5, unitatFormat: 'kg', preuFormat: 28.50, categoria: 'Carn' },
+            { id: 'm_18', nom: 'Entrecot de Vedella', quantitatFormat: 3, unitatFormat: 'kg', preuFormat: 65.00, categoria: 'Carn' },
+            { id: 'm_23', nom: 'Llom de Bacallà', quantitatFormat: 3, unitatFormat: 'kg', preuFormat: 55.50, categoria: 'Peix' },
+            { id: 'm_24', nom: 'Salmó Sencer', quantitatFormat: 5, unitatFormat: 'kg', preuFormat: 48.00, categoria: 'Peix' },
+            { id: 'm_30', nom: 'Oli d\'Oliva Verge Extra', quantitatFormat: 5, unitatFormat: 'L', preuFormat: 44.50, categoria: 'Bàsic' },
+            { id: 'm_36', nom: 'Farina de Blat', quantitatFormat: 25, unitatFormat: 'kg', preuFormat: 18.00, categoria: 'Bàsic' },
+            { id: 'm_37', nom: 'Arròs Bomba', quantitatFormat: 5, unitatFormat: 'kg', preuFormat: 14.50, categoria: 'Bàsic' },
+            { id: 'm_39', nom: 'Sal Fina', quantitatFormat: 1, unitatFormat: 'kg', preuFormat: 0.80, categoria: 'Bàsic' },
+            { id: 'm_40', nom: 'Pebre Negre', quantitatFormat: 1, unitatFormat: 'kg', preuFormat: 12.00, categoria: 'Bàsic' }
+        ];
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('escandall');
+            
+            // Funcions de càrrega i desat en LocalStorage
+            const loadState = (key, defaultVal) => {
+                try {
+                    const saved = localStorage.getItem(key);
+                    return saved ? JSON.parse(saved) : defaultVal;
+                } catch (e) { return defaultVal; }
+            };
+
+            const [inventari, setInventari] = useState(() => loadState('fc_pro_inventari', defaultCatalog));
+            const [ingredients, setIngredients] = useState(() => loadState('fc_pro_ingredients', []));
+            const [nomPlat, setNomPlat] = useState(() => localStorage.getItem('fc_pro_nomPlat') || '');
+            const [procediment, setProcediment] = useState(() => localStorage.getItem('fc_pro_procediment') || '');
+            const [margenBenefici, setMargenBenefici] = useState(() => parseInt(localStorage.getItem('fc_pro_marge')) || 70);
+            
+            // Estats per la IA i Exportació
+            const [generatedImage, setGeneratedImage] = useState(() => localStorage.getItem('fc_pro_image') || null);
+            const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [isExportingPDF, setIsExportingPDF] = useState(false);
+            const [appMessage, setAppMessage] = useState({ text: null, type: 'info' }); 
+            
+            const fileInputRef = useRef(null);
+            const [searchTerm, setSearchTerm] = useState("");
+
+            // Desa automàticament qualsevol canvi al navegador
+            useEffect(() => {
+                localStorage.setItem('fc_pro_inventari', JSON.stringify(inventari));
+                localStorage.setItem('fc_pro_ingredients', JSON.stringify(ingredients));
+                localStorage.setItem('fc_pro_nomPlat', nomPlat);
+                localStorage.setItem('fc_pro_procediment', procediment);
+                localStorage.setItem('fc_pro_marge', margenBenefici.toString());
+                if (generatedImage) {
+                    localStorage.setItem('fc_pro_image', generatedImage);
+                } else {
+                    localStorage.removeItem('fc_pro_image');
+                }
+            }, [inventari, ingredients, nomPlat, procediment, margenBenefici, generatedImage]);
+
+            const showMessage = (text, type = 'error') => {
+                setAppMessage({ text, type });
+                setTimeout(() => setAppMessage({ text: null, type: 'info' }), 4000);
+            };
+
+            // --- LÒGICA D'AUTOMATITZACIÓ DE PREUS I UNITATS ---
+            const calcularCostReal = (ing) => {
+                const rendiment = 1 - ((ing.merma || 0) / 100);
+                const quantitatBruta = (ing.quantitat || 0) / (rendiment || 1);
+                let preuUnitat = ing.preuUnitari || 0;
+                let multiplicador = 1;
+
+                if (ing.inventariId) {
+                    const dbItem = inventari.find(i => i.id === ing.inventariId);
+                    if (dbItem) {
+                        // Calcula el preu per unitat base segons l'inventari
+                        preuUnitat = dbItem.preuFormat / (dbItem.quantitatFormat || 1);
+                        
+                        // Conversió intel·ligent d'unitats (Ex: recepta en grams, inventari en Kilos)
+                        if (ing.unitat === 'g' && dbItem.unitatFormat === 'kg') multiplicador = 0.001;
+                        if (ing.unitat === 'ml' && dbItem.unitatFormat === 'L') multiplicador = 0.001;
+                        if (ing.unitat === 'kg' && dbItem.unitatFormat === 'g') multiplicador = 1000;
+                        if (ing.unitat === 'L' && dbItem.unitatFormat === 'ml') multiplicador = 1000;
+                    }
+                }
+                return quantitatBruta * multiplicador * preuUnitat;
+            };
+
+            const actualitzarIngredient = (id, dades) => {
+                setIngredients(ingredients.map(i => i.id === id ? { ...i, ...dades } : i));
+            };
+
+            const afegirIngredient = () => {
+                setIngredients([...ingredients, { id: Date.now(), inventariId: '', nom: '', quantitat: 0, unitat: 'g', preuUnitari: 0, merma: 0 }]);
+            };
+
+            const eliminarIngredient = (id) => {
+                setIngredients(ingredients.filter(i => i.id !== id));
+            };
+
+            // Funció clau: Vincula el nom escrit amb la base de dades
+            const handleIngredientName = (id, newName) => {
+                const searchStr = newName.trim().toLowerCase();
+                const matchedDbItem = inventari.find(i => i.nom.toLowerCase() === searchStr);
+                
+                if (matchedDbItem) {
+                    actualitzarIngredient(id, { nom: newName, inventariId: matchedDbItem.id });
+                } else {
+                    actualitzarIngredient(id, { nom: newName, inventariId: '' });
+                }
+            };
+
+            const costTotalIngredients = ingredients.reduce((acc, curr) => acc + calcularCostReal(curr), 0);
+            const preuSugerit = (1 - (margenBenefici / 100)) > 0 ? costTotalIngredients / (1 - (margenBenefici / 100)) : 0;
+
+            // --- API GEMINI: LECTURA DE RECEPTES I FOTOS ---
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const base64Data = event.target.result;
+                    analyzeRecipeImage(base64Data, file.type);
+                };
+                reader.readAsDataURL(file);
+                e.target.value = null; // Reseteja l'input
+            };
+
+            const analyzeRecipeImage = async (base64Data, mimeType) => {
+                setIsAnalyzing(true);
+                showMessage("Llegint i extraient dades amb Intel·ligència Artificial...", "info");
+                
+                const maxRetries = 3;
+                const delays = [1000, 2000, 4000];
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                
+                const prompt = `Ets un expert culinari. Analitza aquesta imatge. 
+                Extreu el nom del plat, la llista d'ingredients (amb quantitats) i els passos d'elaboració.
+                Retorna NOMÉS un JSON vàlid amb aquest format precís:
+                {
+                  "nomPlat": "Nom",
+                  "ingredients": [
+                    { "nom": "Ingredient", "quantitat": 100, "unitat": "g" } // usa g, kg, ml, L, ut
+                  ],
+                  "procediment": "1. Pas un.\\n2. Pas dos."
+                }`;
+
+                const payload = {
+                    contents: [{
+                        role: "user",
+                        parts: [
+                            { text: prompt },
+                            { inlineData: { mimeType: mimeType, data: base64Data.split(',')[1] } }
+                        ]
+                    }],
+                    generationConfig: { responseMimeType: "application/json" }
+                };
+
+                for (let i = 0; i <= maxRetries; i++) {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        
+                        if (!response.ok) throw new Error("Error en l'API de visió");
+                        const result = await response.json();
+                        const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                        
+                        if (textResponse) {
+                            const data = JSON.parse(textResponse);
+                            
+                            if (data.nomPlat) setNomPlat(data.nomPlat);
+                            if (data.procediment) setProcediment(data.procediment);
+                            
+                            if (data.ingredients && Array.isArray(data.ingredients)) {
+                                const nousIngredients = data.ingredients.map((ing, idx) => {
+                                    const searchStr = (ing.nom || '').toLowerCase().trim();
+                                    // Auto-vincular amb l'inventari si el nom coincideix parcialment
+                                    const matchedDbItem = inventari.find(item => 
+                                        item.nom.toLowerCase().includes(searchStr) || searchStr.includes(item.nom.toLowerCase())
+                                    );
+                                    
+                                    const unitatsValides = ['g', 'kg', 'ml', 'L', 'ut'];
+                                    const unitatFinal = unitatsValides.includes(ing.unitat) ? ing.unitat : 'g';
+
+                                    return {
+                                        id: Date.now() + idx,
+                                        inventariId: matchedDbItem ? matchedDbItem.id : '',
+                                        nom: matchedDbItem ? matchedDbItem.nom : ing.nom,
+                                        quantitat: ing.quantitat || 0,
+                                        unitat: unitatFinal,
+                                        preuUnitari: 0,
+                                        merma: 0
+                                    };
+                                });
+                                setIngredients(nousIngredients);
+                            }
+                            
+                            // Si hem pujat la foto d'un plat acabat, la posem com a imatge de fons
+                            if (mimeType.startsWith('image/')) {
+                                setGeneratedImage(base64Data);
+                            }
+                            
+                            showMessage("Extracció de la recepta completada!", "success");
+                            setIsAnalyzing(false);
+                            return;
+                        }
+                    } catch (error) {
+                        if (i < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, delays[i]));
+                        } else {
+                            console.error(error);
+                            showMessage("L'anàlisi de la imatge ha fallat.", "error");
+                            setIsAnalyzing(false);
+                        }
+                    }
+                }
+            };
+
+            // --- API IMAGEN: GENERAR FOTO REALISTA ---
+            const generarFotografia = async () => {
+                if (!nomPlat || nomPlat.trim() === '') {
+                    showMessage("Posa un nom al plat abans de generar la imatge.", "error");
+                    return;
+                }
+
+                setIsGeneratingImage(true);
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
+                const prompt = `Fotografia d'alta qualitat, super realista, d'un plat de restaurant d'alta cuina anomenat "${nomPlat}". Il·luminació professional gastronòmica, colors vibrants, presentació elegant.`;
+                const payload = { instances: { prompt: prompt }, parameters: { sampleCount: 1 } };
+
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    if (!response.ok) throw new Error();
+                    const result = await response.json();
+                    
+                    if (result.predictions && result.predictions[0]?.bytesBase64Encoded) {
+                        setGeneratedImage(`data:image/png;base64,${result.predictions[0].bytesBase64Encoded}`);
+                        showMessage("Imatge generada correctament.", "success");
+                    } else {
+                        throw new Error();
+                    }
+                } catch (error) {
+                    showMessage("Error al generar la fotografia.", "error");
+                } finally {
+                    setIsGeneratingImage(false);
+                }
+            };
+
+            // --- EXPORTAR A PDF ---
+            const exportToPDF = () => {
+                setIsExportingPDF(true);
+                const element = document.getElementById('document-escandall');
+                
+                const opt = {
+                    margin:       10,
+                    filename:     `Escandall_${nomPlat ? nomPlat.replace(/\s+/g, '_') : 'Plat'}.pdf`,
+                    image:        { type: 'jpeg', quality: 0.98 },
+                    html2canvas:  { scale: 2, useCORS: true, logging: false },
+                    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                    pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+                };
+
+                window.html2pdf().set(opt).from(element).save().then(() => {
+                    setIsExportingPDF(false);
+                }).catch(err => {
+                    console.error(err);
+                    setIsExportingPDF(false);
+                    showMessage("Error generant el document PDF.", "error");
+                });
+            };
+
+            const inventariFiltrat = inventari.filter(item => 
+                item.nom.toLowerCase().includes(searchTerm.toLowerCase()) || item.categoria.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            return (
+                <div className="min-h-screen pb-20 p-4 md:p-8 text-slate-800">
+                    
+                    {/* Avisos Flotants */}
+                    {appMessage.text && (
+                        <div className={`fixed top-4 right-4 z-50 px-6 py-3 rounded-xl shadow-lg font-bold text-sm animate-fade-in flex items-center gap-3
+                            ${appMessage.type === 'error' ? 'bg-red-500 text-white' : 
+                              appMessage.type === 'success' ? 'bg-emerald-500 text-white' : 
+                              'bg-blue-500 text-white'}`}>
+                            <Icon name={appMessage.type === 'error' ? 'alert-circle' : appMessage.type === 'success' ? 'check-circle' : 'info'} size={18} />
+                            {appMessage.text}
+                        </div>
+                    )}
+
+                    <datalist id="inventari-list">
+                        {inventari.map(item => <option key={item.id} value={item.nom} />)}
+                    </datalist>
+
+                    <input 
+                        type="file" 
+                        accept="image/*" 
+                        ref={fileInputRef} 
+                        onChange={handleFileUpload} 
+                        className="hidden" 
+                    />
+
+                    <div className="max-w-7xl mx-auto">
+                        
+                        {/* HEADER PRINCIPAL */}
+                        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8 print:hidden">
+                            <div className="flex items-center gap-5">
+                                <div className="w-14 h-14 bg-slate-900 rounded-xl flex items-center justify-center shadow-lg text-white">
+                                    <Icon name="chef-hat" size={28} />
+                                </div>
+                                <div>
+                                    <h1 className="text-2xl md:text-3xl font-black tracking-tight text-slate-900">FoodCost Pro</h1>
+                                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1 flex items-center gap-1">
+                                        Auto-Pricing & AI Edition <Icon name="zap" size={12} className="text-amber-500" />
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                                <div className="flex gap-2 p-1.5 bg-slate-200/70 rounded-2xl">
+                                    <button onClick={() => setActiveTab('escandall')} className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${activeTab === 'escandall' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                        <Icon name="receipt" size={16} /> Escandall
+                                    </button>
+                                    <button onClick={() => setActiveTab('inventari')} className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${activeTab === 'inventari' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                        <Icon name="database" size={16} /> Catàleg ({inventari.length})
+                                    </button>
+                                </div>
+                                
+                                {activeTab === 'escandall' && (
+                                    <>
+                                        <button 
+                                            onClick={() => fileInputRef.current?.click()}
+                                            disabled={isAnalyzing}
+                                            className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-sm border border-slate-200 ${isAnalyzing ? 'bg-slate-100 text-slate-400 cursor-wait' : 'bg-white hover:bg-slate-50 text-slate-800'}`}
+                                        >
+                                            <Icon name={isAnalyzing ? "loader-2" : "scan-text"} size={16} className={isAnalyzing ? "animate-spin" : "text-blue-500"} /> 
+                                            {isAnalyzing ? "Llegint..." : "Importar Foto"}
+                                        </button>
+                                        <button 
+                                            onClick={exportToPDF}
+                                            disabled={isExportingPDF}
+                                            className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-sm ${isExportingPDF ? 'bg-amber-100 text-amber-700 cursor-wait' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
+                                        >
+                                            <Icon name={isExportingPDF ? "loader-2" : "file-down"} size={16} className={isExportingPDF ? "animate-spin" : ""} /> 
+                                            PDF
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        </header>
+
+                        {/* VISTA 1: ESCANDALL I ELABORACIÓ */}
+                        {activeTab === 'escandall' && (
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in" id="document-escandall">
+                                
+                                {/* COLUMNA ESQUERRA: DADES DEL PLAT */}
+                                <div className="lg:col-span-8 space-y-6">
+                                    
+                                    {/* Capçalera del Plat i Imatge */}
+                                    <section className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+                                        <div className="flex flex-col md:flex-row">
+                                            <div className="md:w-1/3 relative bg-slate-100 flex items-center justify-center overflow-hidden min-h-[200px]">
+                                                {generatedImage ? (
+                                                    <img src={generatedImage} alt={nomPlat} className="w-full h-full object-cover absolute inset-0 z-0" />
+                                                ) : (
+                                                    <div className="text-slate-400 flex flex-col items-center z-10 p-6 text-center">
+                                                        <Icon name={isGeneratingImage ? "loader-2" : "image-plus"} size={48} className={`mb-3 opacity-50 ${isGeneratingImage ? 'animate-spin' : ''}`} />
+                                                        <p className="text-xs font-bold">{isGeneratingImage ? "Generant..." : "Sense Imatge"}</p>
+                                                    </div>
+                                                )}
+                                                
+                                                <div className="absolute inset-0 bg-black/40 opacity-0 hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2 z-20 print:hidden backdrop-blur-sm">
+                                                    <button 
+                                                        onClick={generarFotografia}
+                                                        disabled={isGeneratingImage || isAnalyzing}
+                                                        className="bg-white text-slate-900 px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 hover:bg-emerald-50 transition-colors"
+                                                    >
+                                                        <Icon name="sparkles" size={14} className="text-emerald-500" /> Generar amb IA
+                                                    </button>
+                                                    {generatedImage && (
+                                                        <button 
+                                                            onClick={() => setGeneratedImage(null)}
+                                                            className="bg-red-500 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 hover:bg-red-600 transition-colors"
+                                                        >
+                                                            <Icon name="trash" size={14} /> Esborrar
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="md:w-2/3 p-6 md:p-8 flex flex-col justify-center bg-white">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center justify-between">
+                                                    Fitxa Tècnica
+                                                </label>
+                                                <input 
+                                                    className="text-3xl md:text-4xl font-black w-full border-none focus:ring-0 placeholder-slate-200 outline-none bg-transparent print:p-0" 
+                                                    placeholder="Nom del plat..." 
+                                                    value={nomPlat} 
+                                                    onChange={e => setNomPlat(e.target.value)} 
+                                                />
+                                                
+                                                {/* Resum visible a l'imprimir */}
+                                                <div className="hidden print:flex md:flex items-center gap-6 mt-6 pt-6 border-t border-slate-100">
+                                                    <div>
+                                                        <p className="text-[10px] font-bold text-slate-400 uppercase">Cost Racció</p>
+                                                        <p className="text-lg font-black text-slate-800">{costTotalIngredients.toFixed(2)}€</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-bold text-slate-400 uppercase">Marge Brut</p>
+                                                        <p className="text-lg font-black text-slate-800">{margenBenefici}%</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-bold text-amber-500 uppercase">PVP Suggerit</p>
+                                                        <p className="text-xl font-black text-amber-500">{preuSugerit.toFixed(2)}€</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </section>
+
+                                    {/* Llista d'Ingredients Automàtics */}
+                                    <section className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 md:p-8 relative">
+                                        {isAnalyzing && (
+                                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center rounded-3xl">
+                                                <Icon name="loader-2" size={48} className="text-blue-500 animate-spin mb-4" />
+                                                <p className="font-bold text-slate-800 animate-pulse">Analitzant la recepta...</p>
+                                            </div>
+                                        )}
+
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h2 className="text-xl font-black flex items-center gap-2">
+                                                <Icon name="utensils" className="text-emerald-500" /> Ingredients
+                                            </h2>
+                                            <span className="hidden md:flex print:hidden text-[10px] font-bold text-slate-500 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full items-center gap-1">
+                                                <Icon name="check-circle" size={12} /> Auto-Pricing Actiu
+                                            </span>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {ingredients.length === 0 && !isAnalyzing && (
+                                                <div className="text-center py-10 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 print:hidden">
+                                                    <Icon name="shopping-basket" size={32} className="mx-auto text-slate-300 mb-3" />
+                                                    <p className="text-sm font-bold text-slate-500">Afegeix ingredients.</p>
+                                                    <p className="text-xs text-slate-400 mt-1">S'enllaçaran amb el teu catàleg de preus automàticament.</p>
+                                                </div>
+                                            )}
+
+                                            {ingredients.map(ing => {
+                                                const isLinked = !!ing.inventariId;
+                                                const dbItem = isLinked ? inventari.find(i => i.id === ing.inventariId) : null;
+                                                // Preu per la unitat de compra del catàleg o manual
+                                                const preuMostrar = isLinked ? (dbItem.preuFormat / (dbItem.quantitatFormat || 1)) : ing.preuUnitari;
+                                                const unitatMostrar = isLinked ? dbItem.unitatFormat : ing.unitat;
+
+                                                return (
+                                                <div key={ing.id} className={`p-4 rounded-2xl border transition-all grid grid-cols-1 md:grid-cols-12 gap-4 items-center relative overflow-hidden ${isLinked ? 'border-emerald-200 bg-emerald-50/20' : 'border-slate-200 bg-white'}`}>
+                                                    
+                                                    {isLinked && <div className="absolute top-0 left-0 w-1.5 h-full bg-emerald-400 print:bg-emerald-500 print:w-1"></div>}
+
+                                                    <div className="md:col-span-4 flex flex-col gap-1.5">
+                                                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Producte</label>
+                                                        <div className="relative">
+                                                            <input 
+                                                                list="inventari-list"
+                                                                className={`w-full border rounded-xl p-2 text-sm font-bold text-slate-800 outline-none print:border-none print:p-0 print:bg-transparent transition-colors ${isLinked ? 'bg-white border-emerald-300 focus:border-emerald-500 pr-8 print:pr-0' : 'bg-slate-50 border-slate-200 focus:border-slate-400'}`}
+                                                                value={ing.nom}
+                                                                placeholder="Busca al catàleg..."
+                                                                onChange={e => handleIngredientName(ing.id, e.target.value)}
+                                                            />
+                                                            {isLinked && (
+                                                                <div className="absolute right-2 top-1/2 -translate-y-1/2 text-emerald-600 print:hidden" title="Connectat al Catàleg">
+                                                                    <Icon name="link" size={14} />
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="md:col-span-2 flex flex-col gap-1.5">
+                                                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Q. Neta</label>
+                                                        <div className="flex items-center bg-white rounded-xl border border-slate-200 print:border-none print:bg-transparent overflow-hidden">
+                                                            <input 
+                                                                type="number" 
+                                                                className="w-full border-none p-2 text-sm font-bold outline-none print:p-0 print:w-auto" 
+                                                                value={ing.quantitat || ''} 
+                                                                placeholder="0"
+                                                                onChange={e => actualitzarIngredient(ing.id, { quantitat: parseFloat(e.target.value) || 0 })} 
+                                                            />
+                                                            <select 
+                                                                className="bg-slate-50 text-[10px] font-black text-slate-600 uppercase py-2.5 px-2 border-l border-slate-200 outline-none print:border-none print:bg-transparent print:p-0 print:pl-1 print:appearance-none"
+                                                                value={ing.unitat}
+                                                                onChange={e => actualitzarIngredient(ing.id, { unitat: e.target.value })}
+                                                            >
+                                                                <option value="g">g</option>
+                                                                <option value="kg">kg</option>
+                                                                <option value="ml">ml</option>
+                                                                <option value="L">L</option>
+                                                                <option value="ut">ut</option>
+                                                            </select>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="md:col-span-1 flex flex-col gap-1.5 text-center print:text-left">
+                                                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Merma</label>
+                                                        <div className="flex items-center bg-white border border-slate-200 rounded-xl print:border-none print:bg-transparent overflow-hidden justify-center print:justify-start">
+                                                            <input 
+                                                                type="number" 
+                                                                className="w-10 border-none p-2 text-sm font-bold text-center print:text-left outline-none print:p-0" 
+                                                                value={ing.merma || ''} 
+                                                                placeholder="0"
+                                                                onChange={e => actualitzarIngredient(ing.id, { merma: parseFloat(e.target.value) || 0 })} 
+                                                            />
+                                                            <span className="text-xs font-bold text-slate-400 pr-2 print:pr-0">%</span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="md:col-span-2 flex flex-col gap-1.5">
+                                                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Tarifa Base</label>
+                                                        {isLinked ? (
+                                                            <div className="h-[38px] print:h-auto px-2 bg-emerald-50 print:bg-transparent print:border-none rounded-xl border border-emerald-200 flex items-center justify-start text-[11px] font-bold text-emerald-700 print:text-slate-800 print:p-0">
+                                                                <span>{preuMostrar.toFixed(2)}€/{unitatMostrar}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="h-[38px] print:h-auto flex items-center bg-white border border-slate-200 print:border-none print:bg-transparent rounded-xl overflow-hidden">
+                                                                <input 
+                                                                    type="number" 
+                                                                    className="w-full h-full p-2 text-sm font-bold outline-none print:p-0 text-right print:text-left" 
+                                                                    value={ing.preuUnitari || ''} 
+                                                                    placeholder="0.00"
+                                                                    onChange={e => actualitzarIngredient(ing.id, { preuUnitari: parseFloat(e.target.value) || 0 })} 
+                                                                />
+                                                                <span className="pr-2 text-xs font-bold text-slate-400 print:pl-1">€</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    <div className="md:col-span-2 flex flex-col gap-1.5 text-right print:text-left">
+                                                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Cost Real</label>
+                                                        <span className="h-[38px] print:h-auto flex items-center justify-end print:justify-start text-sm font-black text-slate-900 print:bg-transparent print:border-none print:p-0 bg-slate-50 px-3 rounded-xl border border-slate-200">
+                                                            {calcularCostReal(ing).toFixed(2)}€
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="md:col-span-1 flex justify-end items-center print:hidden">
+                                                        <button 
+                                                            onClick={() => eliminarIngredient(ing.id)} 
+                                                            className="text-slate-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                                                            title="Esborrar"
+                                                        >
+                                                            <Icon name="trash" size={16} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )})}
+                                            
+                                            <button 
+                                                onClick={afegirIngredient} 
+                                                className="w-full py-4 mt-2 border-2 border-dashed border-slate-300 rounded-2xl text-[11px] font-black uppercase tracking-widest text-slate-500 hover:border-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 transition-all flex items-center justify-center gap-2 print:hidden"
+                                            >
+                                                <Icon name="plus" size={16} /> Fila Manual
+                                            </button>
+                                        </div>
+                                    </section>
+
+                                    {/* Procediment d'Elaboració (Print Safe) */}
+                                    <section className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 md:p-8">
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h2 className="text-xl font-black flex items-center gap-2">
+                                                <Icon name="list-ordered" className="text-amber-500" /> Elaboració i Passos
+                                            </h2>
+                                        </div>
+                                        
+                                        {/* Vista interactiva (s'amaga al PDF per evitar talls de la caixa) */}
+                                        <textarea 
+                                            className="w-full min-h-[250px] p-5 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-medium text-slate-700 outline-none focus:border-amber-400 focus:bg-white transition-colors resize-y print:hidden"
+                                            placeholder="Detalla aquí els passos de la recepta, temps de cocció, temperatures..."
+                                            value={procediment}
+                                            onChange={e => setProcediment(e.target.value)}
+                                        ></textarea>
+                                        
+                                        {/* Vista PDF pura (expandeix el text perquè es llegeixi tot en el PDF creat) */}
+                                        <div className="hidden print:block whitespace-pre-wrap text-sm text-slate-800 font-medium leading-relaxed">
+                                            {procediment || <span className="text-slate-400 italic">No s'han especificat els passos d'elaboració per aquesta recepta.</span>}
+                                        </div>
+                                    </section>
+
+                                </div>
+
+                                {/* COLUMNA DRETA: CÀLCUL DEL RENDIMENT FINANCER */}
+                                <div className="lg:col-span-4 space-y-6 print:hidden">
+                                    <div className="bg-slate-900 text-white p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden sticky top-8 border border-slate-800">
+                                        <div className="absolute -top-10 -right-10 opacity-10 text-emerald-400">
+                                            <Icon name="pie-chart" size={180} />
+                                        </div>
+                                        <div className="relative z-10">
+                                            <h3 className="text-xs font-black text-emerald-400 uppercase tracking-widest mb-8 flex items-center gap-2">
+                                                <Icon name="calculator" size={16} /> Financers
+                                            </h3>
+                                            
+                                            <div className="space-y-8">
+                                                <div>
+                                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Cost Global Base</p>
+                                                    <p className="text-4xl font-black tracking-tight">{costTotalIngredients.toFixed(2)}€</p>
+                                                </div>
+                                                
+                                                <div className="bg-white/5 p-6 rounded-3xl border border-white/10 backdrop-blur-md">
+                                                    <div className="flex justify-between items-center text-[11px] font-black uppercase mb-5">
+                                                        <span className="text-slate-300">Marge Brut Fixat</span>
+                                                        <span className="text-slate-900 text-sm bg-emerald-400 px-3 py-1 rounded-lg">{margenBenefici}%</span>
+                                                    </div>
+                                                    <input 
+                                                        type="range" 
+                                                        min="10" max="95" step="1" 
+                                                        className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer" 
+                                                        value={margenBenefici} 
+                                                        onChange={e => setMargenBenefici(e.target.value)} 
+                                                    />
+                                                </div>
+                                                
+                                                <div className="pt-6 border-t border-white/10">
+                                                    <p className="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-2">Preu de Venda Públic (PVP)</p>
+                                                    <p className="text-5xl font-black text-amber-400 tracking-tighter">
+                                                        {preuSugerit.toFixed(2)}€
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* VISTA 2: GESTOR DE CATÀLEG CENTRAL */}
+                        {activeTab === 'inventari' && (
+                            <div className="animate-fade-in max-w-6xl mx-auto">
+                                <div className="bg-emerald-700 rounded-3xl p-6 md:p-8 text-white mb-8 shadow-lg relative overflow-hidden">
+                                    <div className="relative z-10">
+                                        <div className="flex items-center gap-3 mb-2">
+                                            <Icon name="server" size={24} className="text-emerald-300" />
+                                            <h3 className="text-xl md:text-2xl font-black">Catàleg Central i Llotja</h3>
+                                        </div>
+                                        <p className="text-sm text-emerald-100 max-w-xl">
+                                            Actualitza el preu de les teves compres aquí. Enllaçarem automàticament aquests costos a les llistes d'ingredients dels teus escandalls.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                                    <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                                        <div className="relative w-1/2">
+                                            <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            <input 
+                                                type="text" 
+                                                className="w-full pl-10 p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-emerald-500 transition-colors" 
+                                                placeholder="Cerca per nom o categoria..." 
+                                                value={searchTerm}
+                                                onChange={e => setSearchTerm(e.target.value)}
+                                            />
+                                        </div>
+                                        <button 
+                                            onClick={() => {
+                                                setInventari([{ id: 'inv_' + Date.now(), nom: '', quantitatFormat: 1, unitatFormat: 'kg', preuFormat: 0, categoria: 'Personalitzat' }, ...inventari]);
+                                            }} 
+                                            className="bg-slate-900 text-white px-5 py-3 rounded-xl font-bold text-xs flex items-center gap-2 hover:bg-slate-800 transition-colors"
+                                        >
+                                            <Icon name="plus" size={14} /> Afegir Producte
+                                        </button>
+                                    </div>
+
+                                    <div className="overflow-x-auto max-h-[600px]">
+                                        <table className="w-full text-left border-collapse min-w-[800px]">
+                                            <thead className="bg-slate-100 sticky top-0 z-10">
+                                                <tr>
+                                                    <th className="py-3 px-6 text-[10px] font-black text-slate-500 uppercase">Producte de l'Inventari</th>
+                                                    <th className="py-3 px-6 text-[10px] font-black text-slate-500 uppercase">Format Lliurament</th>
+                                                    <th className="py-3 px-6 text-[10px] font-black text-slate-500 uppercase text-right">Cost Factura</th>
+                                                    <th className="py-3 px-6 text-[10px] font-black text-emerald-700 uppercase bg-emerald-50">Ratio d'Ús</th>
+                                                    <th className="py-3 px-4"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {inventariFiltrat.map(item => {
+                                                    const autoPreu = item.preuFormat / (item.quantitatFormat || 1);
+                                                    return (
+                                                    <tr key={item.id} className="hover:bg-slate-50 group">
+                                                        <td className="py-2 px-6">
+                                                            <div className="flex flex-col gap-1">
+                                                                <input className="font-bold text-sm bg-transparent outline-none text-slate-800 focus:border-b border-emerald-300" placeholder="Nom..." value={item.nom} onChange={e => {
+                                                                    setInventari(inventari.map(i => i.id === item.id ? { ...i, nom: e.target.value } : i));
+                                                                }} />
+                                                                <input className="text-[10px] font-bold text-slate-400 uppercase bg-transparent outline-none" placeholder="Categoria..." value={item.categoria} onChange={e => {
+                                                                    setInventari(inventari.map(i => i.id === item.id ? { ...i, categoria: e.target.value } : i));
+                                                                }} />
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2 px-6">
+                                                            <div className="flex border border-slate-300 rounded-lg w-32 overflow-hidden bg-white">
+                                                                <input type="number" className="w-20 p-2 text-sm text-center outline-none" placeholder="Q" value={item.quantitatFormat || ''} onChange={e => {
+                                                                    setInventari(inventari.map(i => i.id === item.id ? { ...i, quantitatFormat: parseFloat(e.target.value)||0 } : i));
+                                                                }} />
+                                                                <select className="bg-slate-50 p-2 text-xs font-bold border-l border-slate-300 outline-none w-full" value={item.unitatFormat} onChange={e => {
+                                                                    setInventari(inventari.map(i => i.id === item.id ? { ...i, unitatFormat: e.target.value } : i));
+                                                                }}>
+                                                                    <option value="kg">kg</option>
+                                                                    <option value="g">g</option>
+                                                                    <option value="L">L</option>
+                                                                    <option value="ml">ml</option>
+                                                                    <option value="ut">ut</option>
+                                                                </select>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2 px-6 text-right">
+                                                            <div className="flex justify-end border border-slate-300 rounded-lg w-24 ml-auto bg-white overflow-hidden">
+                                                                <input type="number" className="w-full p-2 text-sm text-right outline-none font-black text-slate-700" placeholder="€" value={item.preuFormat || ''} onChange={e => {
+                                                                    setInventari(inventari.map(i => i.id === item.id ? { ...i, preuFormat: parseFloat(e.target.value)||0 } : i));
+                                                                }} />
+                                                                <span className="p-2 text-xs text-slate-400 font-black">€</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2 px-6 bg-emerald-50/50">
+                                                            <div className="text-sm font-black text-emerald-700 bg-white px-3 py-1.5 rounded-lg border border-emerald-200 w-max ml-auto shadow-sm">
+                                                                {autoPreu.toFixed(2)} € / 1{item.unitatFormat}
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2 px-4 text-right">
+                                                            <button onClick={() => {
+                                                                if(confirm("Segur que vols eliminar permanentment aquest producte del catàleg?")) {
+                                                                    setInventari(inventari.filter(i => i.id !== item.id));
+                                                                }
+                                                            }} className="text-slate-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all">
+                                                                <Icon name="trash" size={16} />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                )})}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
